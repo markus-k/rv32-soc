@@ -1,0 +1,10 @@
+/mose/
+/ise/
+/vivado/
+coregen.log
+
+/fw/*.o
+/fw/*.bin
+/fw/*.elf
+/fw/*.hex
+/fw/*.map
