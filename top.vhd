@@ -2,6 +2,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
+use work.rv32_pkg.all;
 
 entity top is
   port (
@@ -83,19 +84,8 @@ architecture rtl of top is
 
   signal clk : std_logic;
 
-  signal ram_ready : std_logic;
-  signal ram_rdata : std_logic_vector(31 downto 0);
-  signal ram_valid : std_logic;
-  signal ram_addr  : std_logic_vector(31 downto 0);
-  signal ram_wdata : std_logic_vector(31 downto 0);
-  signal ram_wstrb : std_logic_vector(3 downto 0);
-
-  signal rom_ready : std_logic;
-  signal rom_rdata : std_logic_vector(31 downto 0);
-  signal rom_valid : std_logic;
-  signal rom_addr  : std_logic_vector(31 downto 0);
-  signal rom_wdata : std_logic_vector(31 downto 0);
-  signal rom_wstrb : std_logic_vector(3 downto 0);
+  signal nres_cpu : std_logic;
+  signal nres_periph : std_logic;
 
   signal mem_la_read  : std_logic;
   signal mem_la_write : std_logic;
@@ -103,20 +93,16 @@ architecture rtl of top is
   signal mem_la_wdata : std_logic_vector(31 downto 0);
   signal mem_la_wstrb : std_logic_vector(3 downto 0);
 
-  signal mem_ready : std_logic;
-  signal mem_rdata : std_logic_vector(31 downto 0);
-  signal mem_valid : std_logic;
   signal mem_instr : std_logic;
-  signal mem_addr  : std_logic_vector(31 downto 0);
-  signal mem_wdata : std_logic_vector(31 downto 0);
-  signal mem_wstrb : std_logic_vector(3 downto 0);
 
-  signal iomem_ready : std_logic;
-  signal iomem_rdata : std_logic_vector(31 downto 0);
-  signal iomem_valid : std_logic;
-  signal iomem_addr  : std_logic_vector(31 downto 0);
-  signal iomem_wdata : std_logic_vector(31 downto 0);
-  signal iomem_wstrb : std_logic_vector(3 downto 0);
+  -- memory busses
+  signal cpu_mem_bus : mem_bus;
+
+  signal rom_mem_bus : mem_bus;
+  signal ram_mem_bus : mem_bus;
+
+  signal gpio_mem_bus : mem_bus;
+  signal uart_mem_bus : mem_bus;
 
   signal pcpi_valid : std_logic;
   signal pcpi_insn  : std_logic_vector(31 downto 0);
@@ -139,35 +125,31 @@ begin
     port map (
       clk   => clk,
       nres  => nres,
-      addr  => ram_addr,
-      rdata => ram_rdata,
-      wdata => ram_wdata,
-      wstrb => ram_wstrb,
-      valid => ram_valid,
-      ready => ram_ready);
+      addr  => ram_mem_bus.from_master.addr,
+      rdata => ram_mem_bus.to_master.rdata,
+      wdata => ram_mem_bus.from_master.wdata,
+      wstrb => ram_mem_bus.from_master.wstrb,
+      valid => ram_mem_bus.from_master.valid,
+      ready => ram_mem_bus.to_master.ready);
 
   bootrom_1 : entity work.rom
     port map (
       clk   => clk,
       nres  => nres,
-      addr  => rom_addr,
-      rdata => rom_rdata,
-      wdata => rom_wdata,
-      wstrb => rom_wstrb,
-      valid => rom_valid,
-      ready => rom_ready);
+      addr  => rom_mem_bus.from_master.addr,
+      rdata => rom_mem_bus.to_master.rdata,
+      wdata => rom_mem_bus.from_master.wdata,
+      wstrb => rom_mem_bus.from_master.wstrb,
+      valid => rom_mem_bus.from_master.valid,
+      ready => rom_mem_bus.to_master.ready);
 
   -- instance "gpio_1"
   gpio_1 : entity work.gpio
     port map (
       clk         => clk,
-      nres        => nres,
-      iomem_addr  => iomem_addr,
-      iomem_rdata => iomem_rdata,
-      iomem_wdata => iomem_wdata,
-      iomem_wstrb => iomem_wstrb,
-      iomem_valid => iomem_valid,
-      iomem_ready => iomem_ready,
+      nres        => nres_periph,
+      slave_in    => gpio_mem_bus.from_master,
+      slave_out   => gpio_mem_bus.to_master,
       gpio_out    => gpio_out,
       gpio_in     => gpio_in,
       gpio_dir    => gpio_dir);
@@ -176,15 +158,15 @@ begin
   picorv32_1 : entity work.picorv32
     port map (
       clk    => clk,
-      resetn => nres,
+      resetn => nres_cpu,
 
-      mem_ready => mem_ready,
-      mem_rdata => mem_rdata,
-      mem_valid => mem_valid,
+      mem_ready => cpu_mem_bus.to_master.ready,
+      mem_rdata => cpu_mem_bus.to_master.rdata,
+      mem_valid => cpu_mem_bus.from_master.valid,
       mem_instr => mem_instr,
-      mem_addr  => mem_addr,
-      mem_wdata => mem_wdata,
-      mem_wstrb => mem_wstrb,
+      mem_addr  => cpu_mem_bus.from_master.addr,
+      mem_wdata => cpu_mem_bus.from_master.wdata,
+      mem_wstrb => cpu_mem_bus.from_master.wstrb,
 
       mem_la_read  => mem_la_read,
       mem_la_write => mem_la_write,
@@ -208,44 +190,32 @@ begin
       trace_valid => trace_valid,
       trace_data  => trace_data);
 
-  -- purpose: memory bus arbiter
-  -- type   : combinational
-  -- inputs : mem_addr
-  -- outputs:
-  --
-  -- Address low | Address high | Peripheral
-  -- 0x00000000  | 0x00000fff   | ROM
-  -- 0x20000000  | 0x20000fff   | RAM
-  -- 0x40000000  | 0x4fffffff   | IO
-  mem_arb : process (mem_addr, mem_valid, ram_rdata, ram_ready, rom_rdata, rom_ready, iomem_rdata, iomem_ready) is
-  begin  -- process mem_arb
-    iomem_valid <= '0';
-    ram_valid   <= '0';
-    rom_valid   <= '0';
-    mem_rdata   <= (others => '0');
-    mem_ready   <= '0';
+  -- instance "interconnect_1"
+  interconnect_1: entity work.interconnect
+    generic map (
+      master1_addr => X"00000000",
+      master1_size => 24,
+      master2_addr => X"20000000",
+      master2_size => 16,
+      master3_addr => X"40000000",
+      master3_size => 4,
+      master4_addr => X"41000000",
+      master4_size => 4)
+    port map (
+      clock       => clk,
+      nres        => nres,
 
-    if mem_valid = '1' then
-      if mem_addr(31 downto 12) = X"00000" then
-        -- program space
-        rom_valid <= '1';
-        mem_rdata <= rom_rdata;
-        mem_ready <= rom_ready;
-      elsif mem_addr(31 downto 28) = X"2" then
-        -- ram space
-        ram_valid <= '1';
-        mem_rdata <= ram_rdata;
-        mem_ready <= ram_ready;
-      elsif mem_addr(31 downto 28) = X"4" then
-        -- peripheral space
-        iomem_valid <= '1';
-        mem_rdata <= iomem_rdata;
-        mem_ready <= iomem_ready;
-      else
-        -- invalid memory region
-      end if;
-    end if;
-  end process mem_arb;
+      slave1_in   => cpu_mem_bus.from_master,
+      slave1_out  => cpu_mem_bus.to_master,
+
+      master1_in  => rom_mem_bus.to_master,
+      master1_out => rom_mem_bus.from_master,
+      master2_in  => ram_mem_bus.to_master,
+      master2_out => ram_mem_bus.from_master,
+      master3_in  => gpio_mem_bus.to_master,
+      master3_out => gpio_mem_bus.from_master,
+      master4_in  => uart_mem_bus.to_master,
+      master4_out => uart_mem_bus.from_master);
 
   gpio_inout: process (gpio, gpio_out, gpio_dir) is
   begin
@@ -260,18 +230,6 @@ begin
     end loop;
   end process gpio_inout;
 
-  iomem_addr  <= mem_addr;
-  iomem_wdata <= mem_wdata;
-  iomem_wstrb <= mem_wstrb;
-
-  ram_addr  <= mem_addr;
-  ram_wdata <= mem_wdata;
-  ram_wstrb <= mem_wstrb;
-
-  rom_addr <= mem_addr;
-  rom_wdata <= mem_wdata;
-  rom_wstrb <= mem_wstrb;
-
   clk <= clk_50;
 
   led  <= gpio_out(7 downto 0);
@@ -279,4 +237,7 @@ begin
   trap <= cpu_trap;
 
   irq <= (others => '0');
+
+  nres_cpu <= nres;
+  nres_periph <= nres;
 end architecture rtl;

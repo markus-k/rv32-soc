@@ -2,6 +2,8 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
+use work.rv32_pkg.all;
+
 entity gpio is
   generic (
     BASE_ADDR : std_logic_vector(31 downto 0) := X"40000000";
@@ -14,12 +16,8 @@ entity gpio is
     clk : in std_logic;
     nres : in std_logic;
 
-    iomem_addr  : in  std_logic_vector(31 downto 0);
-    iomem_rdata : out std_logic_vector(31 downto 0);
-    iomem_wdata : in  std_logic_vector(31 downto 0);
-    iomem_wstrb : in  std_logic_vector(3 downto 0);
-    iomem_valid : in  std_logic;
-    iomem_ready : out std_logic;
+    slave_in  : in  mem_bus_from_master;
+    slave_out : out mem_bus_to_master;
 
     gpio_out : out std_logic_vector(31 downto 0);
     gpio_in : in std_logic_vector(31 downto 0);
@@ -67,7 +65,7 @@ begin
     end if;
   end process seq;
 
-  comb: process (iomem_addr, iomem_wdata, iomem_wstrb, iomem_valid, gpio_out_cs, gpio_dir_cs, gpio_in_cs) is
+  comb: process (slave_in.addr, slave_in.wdata, slave_in.wstrb, slave_in.valid, gpio_out_cs, gpio_dir_cs, gpio_in_cs) is
     variable gpio_out_v : std_logic_vector(31 downto 0);
     variable gpio_dir_v : std_logic_vector(31 downto 0);
 
@@ -80,24 +78,24 @@ begin
     iomem_rdata_v := (others => '0');
     iomem_ready_v := '0';
 
-    if iomem_valid = '1' then
-      if iomem_wstrb = "1111" then
+    if slave_in.valid = '1' then
+      if slave_in.wstrb = "1111" then
         -- only supports full dword access now
 
-        case iomem_addr is
+        case slave_in.addr is
           when reg_addr(REG_OUT_OFFSET) =>
-            gpio_out_v := iomem_wdata;
+            gpio_out_v := slave_in.wdata;
             iomem_ready_v := '1';
           when reg_addr(REG_DIR_OFFSET) =>
-            gpio_dir_v := iomem_wdata;
+            gpio_dir_v := slave_in.wdata;
             iomem_ready_v := '1';
           when others =>
             null;
         end case;
-      elsif iomem_wstrb = "0000" then
+      elsif slave_in.wstrb = "0000" then
         -- read
 
-        case iomem_addr is
+        case slave_in.addr is
           when reg_addr(REG_OUT_OFFSET) =>
             iomem_rdata_v := gpio_out_v;
             iomem_ready_v := '1';
@@ -120,8 +118,8 @@ begin
     iomem_ready_ns <= iomem_ready_v;
   end process comb;
 
-  iomem_rdata <= iomem_rdata_cs;
-  iomem_ready <= iomem_ready_cs;
+  slave_out.rdata <= iomem_rdata_cs;
+  slave_out.ready <= iomem_ready_cs;
 
   gpio_out <= gpio_out_cs;
   gpio_dir <= gpio_dir_cs;
