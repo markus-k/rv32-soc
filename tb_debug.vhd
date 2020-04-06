@@ -43,6 +43,8 @@ begin  -- architecture bhv
       clk <= '0';
       wait for halfClkPeriod;
     end loop;
+
+    wait;
   end process;
 
   nres_gen: process is

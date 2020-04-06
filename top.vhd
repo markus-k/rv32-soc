@@ -12,7 +12,24 @@ entity top is
     led  : out std_logic_vector(7 downto 0);
     gpio : inout std_logic_vector(31 downto 0);
 
-    trap : out std_logic
+    trap : out std_logic;
+
+    dbg_cs : in std_logic;
+    dbg_clk : in std_logic;
+    dbg_miso : out std_logic;
+    dbg_mosi : in std_logic;
+
+    -- sdram
+    sdram_clk : out std_logic;
+    sdram_clr : out std_logic;
+    sdram_cs : out std_logic;
+    sdram_cas : out std_logic;
+    sdram_ras : out std_logic;
+    sdram_we : out std_logic;
+    sdram_dqm : out std_logic;
+    sdram_bank : out std_logic_vector(1 downto 0);
+    sdram_addr : out std_logic_vector(12 downto 0);
+    sdram_dq : inout std_logic_vector(7 downto 0)
     );
 end entity top;
 
@@ -97,9 +114,12 @@ architecture rtl of top is
 
   -- memory busses
   signal cpu_mem_bus : mem_bus;
+  signal debug_mem_bus : mem_bus;
 
   signal rom_mem_bus : mem_bus;
   signal ram_mem_bus : mem_bus;
+
+  signal system_mem_bus : mem_bus;
 
   signal gpio_mem_bus : mem_bus;
   signal uart_mem_bus : mem_bus;
@@ -190,6 +210,19 @@ begin
       trace_valid => trace_valid,
       trace_data  => trace_data);
 
+  -- instance "debug_1"
+  debug_1: entity work.debug
+    port map (
+      clk        => clk,
+      nres       => nres,
+      dbg_cs     => dbg_cs,
+      dbg_clk    => dbg_clk,
+      dbg_miso   => dbg_miso,
+      dbg_mosi   => dbg_mosi,
+      nres_out   => open,
+      master_in  => debug_mem_bus.to_master,
+      master_out => debug_mem_bus.from_master);
+
   -- instance "interconnect_1"
   interconnect_1: entity work.interconnect
     generic map (
@@ -205,8 +238,8 @@ begin
       clock       => clk,
       nres        => nres,
 
-      slave1_in   => cpu_mem_bus.from_master,
-      slave1_out  => cpu_mem_bus.to_master,
+      slave1_in   => system_mem_bus.from_master,
+      slave1_out  => system_mem_bus.to_master,
 
       master1_in  => rom_mem_bus.to_master,
       master1_out => rom_mem_bus.from_master,
@@ -216,6 +249,18 @@ begin
       master3_out => gpio_mem_bus.from_master,
       master4_in  => uart_mem_bus.to_master,
       master4_out => uart_mem_bus.from_master);
+
+  -- instance "bus_arb_1"
+  bus_arb_1: entity work.bus_arb
+    port map (
+      clk         => clk,
+      nres        => nres,
+      slave1_in   => cpu_mem_bus.from_master,
+      slave1_out  => cpu_mem_bus.to_master,
+      slave2_in   => debug_mem_bus.from_master,
+      slave2_out  => debug_mem_bus.to_master,
+      master1_in  => system_mem_bus.to_master,
+      master1_out => system_mem_bus.from_master);
 
   gpio_inout: process (gpio, gpio_out, gpio_dir) is
   begin
@@ -240,4 +285,15 @@ begin
 
   nres_cpu <= nres;
   nres_periph <= nres;
+
+  sdram_clk  <= 'Z';
+  sdram_clr  <= 'Z';
+  sdram_cs   <= 'Z';
+  sdram_cas  <= 'Z';
+  sdram_ras  <= 'Z';
+  sdram_we   <= 'Z';
+  sdram_dqm  <= 'Z';
+  sdram_bank <= (others => 'Z');
+  sdram_addr <= (others => 'Z');
+  sdram_dq   <= (others => 'Z');
 end architecture rtl;
